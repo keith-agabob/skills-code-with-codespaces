@@ -1,3 +1,446 @@
-<html>
-  <h1>Hello from the codespace!</h1>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crossbar Challenge</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at center, #76c9ff 0%, #2d5c8d 60%, #18304a 100%);
+        color: #ffffff;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        align-items: center;
+      }
+
+      header {
+        text-align: center;
+        padding: 2rem 1rem 1rem;
+      }
+
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: clamp(2rem, 5vw, 3.25rem);
+        letter-spacing: 0.05em;
+      }
+
+      p.description {
+        margin: 0;
+        font-size: clamp(1rem, 2.5vw, 1.15rem);
+        max-width: 700px;
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: min(100%, 960px);
+        padding: 0 1rem 3rem;
+        box-sizing: border-box;
+      }
+
+      canvas {
+        width: 100%;
+        max-width: 960px;
+        height: auto;
+        background: linear-gradient(#7bc6ff 0%, #7bc6ff 65%, #59a84c 65%, #4c903f 100%);
+        border-radius: 16px;
+        box-shadow: 0 24px 50px rgba(0, 0, 0, 0.35);
+        touch-action: none;
+        cursor: crosshair;
+      }
+
+      .hud {
+        margin-top: 1.5rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
+        width: 100%;
+      }
+
+      .hud section {
+        background: rgba(0, 0, 0, 0.35);
+        padding: 1rem;
+        border-radius: 12px;
+        backdrop-filter: blur(6px);
+        text-align: center;
+      }
+
+      button {
+        margin-top: 0.75rem;
+        background: #ffb347;
+        color: #1d2a38;
+        border: none;
+        border-radius: 999px;
+        padding: 0.65rem 1.5rem;
+        font-weight: 600;
+        font-size: 1rem;
+        cursor: pointer;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.25);
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      .status {
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+
+      @media (max-width: 600px) {
+        canvas {
+          border-radius: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Crossbar Challenge</h1>
+      <p class="description">
+        Pull back from the ball on the left and release to launch it toward the
+        goal on the right. The longer the swipe, the more power—aim carefully to
+        ping the crossbar!
+      </p>
+    </header>
+    <main>
+      <canvas id="pitch" width="960" height="520" aria-label="Crossbar Challenge canvas"></canvas>
+      <div class="hud">
+        <section>
+          <div>Attempts</div>
+          <div class="status" id="attempts">0</div>
+        </section>
+        <section>
+          <div>Best Streak</div>
+          <div class="status" id="streak">0</div>
+        </section>
+        <section>
+          <div>Last Result</div>
+          <div class="status" id="result">Give it a go!</div>
+          <button id="reset">Reset Ball</button>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const canvas = document.getElementById("pitch");
+      const ctx = canvas.getContext("2d");
+
+      const groundY = canvas.height - 60;
+      const ball = {
+        radius: 22,
+        startX: 200,
+        startY: groundY - 22,
+        x: 200,
+        y: groundY - 22,
+        vx: 0,
+        vy: 0,
+        moving: false,
+        aiming: false,
+        aimPoint: null,
+      };
+
+      const goal = {
+        y: 210,
+        width: 170,
+        height: 200,
+        depth: 90,
+        crossbarHeight: 12,
+        rightMargin: 120,
+      };
+      goal.x = canvas.width - goal.width - goal.rightMargin;
+
+      const gravity = 0.45;
+      const dragFactor = 0.993;
+      const powerScale = 0.09;
+      const maxPower = 1200;
+
+      let attempts = 0;
+      let streak = 0;
+      let bestStreak = 0;
+      let lastResult = "Give it a go!";
+      let hitRegistered = false;
+
+      const attemptsEl = document.getElementById("attempts");
+      const streakEl = document.getElementById("streak");
+      const resultEl = document.getElementById("result");
+      const resetBtn = document.getElementById("reset");
+
+      function resetBall(hard = false) {
+        ball.x = ball.startX;
+        ball.y = ball.startY;
+        ball.vx = 0;
+        ball.vy = 0;
+        ball.moving = false;
+        ball.aiming = false;
+        ball.aimPoint = null;
+        hitRegistered = false;
+        if (hard) {
+          attempts = 0;
+          streak = 0;
+          bestStreak = 0;
+          lastResult = "Give it a go!";
+          updateHud();
+        }
+      }
+
+      resetBtn.addEventListener("click", () => resetBall());
+
+      function updateHud() {
+        attemptsEl.textContent = attempts;
+        streakEl.textContent = bestStreak;
+        resultEl.textContent = lastResult;
+      }
+
+      function pointerPos(event) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+        const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+        return { x, y };
+      }
+
+      function startAim(event) {
+        if (ball.moving) return;
+        const pos = pointerPos(event);
+        const dist = Math.hypot(pos.x - ball.x, pos.y - ball.y);
+        if (dist <= ball.radius * 1.4) {
+          ball.aiming = true;
+          ball.aimPoint = pos;
+          canvas.setPointerCapture(event.pointerId);
+        }
+      }
+
+      function updateAim(event) {
+        if (!ball.aiming) return;
+        ball.aimPoint = pointerPos(event);
+      }
+
+      function releaseAim(event) {
+        if (!ball.aiming) return;
+        const pos = pointerPos(event);
+        const dx = ball.x - pos.x;
+        const dy = ball.y - pos.y;
+        const power = Math.min(Math.hypot(dx, dy), maxPower);
+        const scale = powerScale * (power / (Math.hypot(dx, dy) || 1));
+        ball.vx = dx * scale;
+        ball.vy = dy * scale;
+        ball.moving = true;
+        ball.aiming = false;
+        ball.aimPoint = null;
+        attempts += 1;
+        lastResult = "So close!";
+        updateHud();
+        canvas.releasePointerCapture(event.pointerId);
+      }
+
+      canvas.addEventListener("pointerdown", startAim);
+      canvas.addEventListener("pointermove", updateAim);
+      canvas.addEventListener("pointerup", releaseAim);
+      canvas.addEventListener("pointercancel", () => {
+        ball.aiming = false;
+        ball.aimPoint = null;
+      });
+
+      function drawPitch() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Grass shading
+        ctx.fillStyle = "#6baf51";
+        ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        const stripeWidth = 80;
+        for (let x = 0; x < canvas.width; x += stripeWidth) {
+          if ((x / stripeWidth) % 2 === 0) {
+            ctx.fillRect(x, groundY, stripeWidth, canvas.height - groundY);
+          }
+        }
+
+        drawGoal();
+        drawBall();
+        drawAimingLine();
+      }
+
+      function drawGoal() {
+        const { x, y, width, height, depth, crossbarHeight } = goal;
+
+        // Net
+        ctx.save();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + width, y);
+        ctx.lineTo(x + width + depth, y + height);
+        ctx.lineTo(x + depth, y + height);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Goal posts and crossbar
+        ctx.fillStyle = "#f3f6fa";
+        ctx.fillRect(x - 6, y, 12, height);
+        ctx.fillRect(x + width - 6, y, 12, height);
+        ctx.fillRect(x - 6, y - crossbarHeight, width + 12, crossbarHeight);
+
+        // Shadow for crossbar depth
+        ctx.fillStyle = "rgba(0,0,0,0.2)";
+        ctx.fillRect(x - 6, y, width + 12, 6);
+      }
+
+      function drawBall() {
+        const gradient = ctx.createRadialGradient(
+          ball.x - ball.radius * 0.4,
+          ball.y - ball.radius * 0.4,
+          ball.radius * 0.4,
+          ball.x,
+          ball.y,
+          ball.radius
+        );
+        gradient.addColorStop(0, "#ffffff");
+        gradient.addColorStop(1, "#e4e4e4");
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Simple pentagon pattern
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+          const angle = ((Math.PI * 2) / 5) * i - Math.PI / 2;
+          const px = ball.x + Math.cos(angle) * (ball.radius * 0.55);
+          const py = ball.y + Math.sin(angle) * (ball.radius * 0.55);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      function drawAimingLine() {
+        if (!ball.aiming || !ball.aimPoint) return;
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([12, 6]);
+        ctx.beginPath();
+        ctx.moveTo(ball.x, ball.y);
+        ctx.lineTo(ball.aimPoint.x, ball.aimPoint.y);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(ball.aimPoint.x, ball.aimPoint.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function stepPhysics() {
+        if (!ball.moving) return;
+
+        ball.vy += gravity;
+        ball.vx *= dragFactor;
+        ball.vy *= dragFactor;
+
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        detectCrossbarHit();
+        handleGroundCollision();
+        keepBallInBounds();
+      }
+
+      function handleGroundCollision() {
+        if (ball.y + ball.radius >= groundY) {
+          ball.y = groundY - ball.radius;
+          ball.vy *= -0.45;
+          ball.vx *= 0.76;
+          if (Math.abs(ball.vy) < 0.6) ball.vy = 0;
+          if (Math.abs(ball.vx) < 0.35) ball.vx = 0;
+          if (ball.vx === 0 && ball.vy === 0) {
+            ball.moving = false;
+            ball.aiming = false;
+            ball.aimPoint = null;
+            const success = hitRegistered;
+            if (!success) {
+              streak = 0;
+            }
+            lastResult = success ? "Ping!" : "Try again.";
+            updateHud();
+            setTimeout(() => {
+              resetBall();
+            }, 600);
+          }
+        }
+      }
+
+      function keepBallInBounds() {
+        const padding = 30;
+        if (ball.x - ball.radius < padding) {
+          ball.x = padding + ball.radius;
+          ball.vx *= -0.4;
+        }
+        if (ball.x + ball.radius > canvas.width - padding) {
+          ball.x = canvas.width - padding - ball.radius;
+          ball.vx *= -0.4;
+        }
+        if (ball.y - ball.radius < 10) {
+          ball.y = 10 + ball.radius;
+          ball.vy *= -0.4;
+        }
+      }
+
+      function detectCrossbarHit() {
+        if (hitRegistered) return;
+        const x1 = goal.x - 6;
+        const y1 = goal.y - goal.crossbarHeight / 2;
+        const x2 = goal.x + goal.width + 6;
+        const y2 = y1;
+        const dist = pointToSegmentDistance(ball.x, ball.y, x1, y1, x2, y2);
+        const approachingFromBelow = ball.y < y1 + ball.radius * 1.2;
+        if (dist <= ball.radius && approachingFromBelow && ball.vy < 0) {
+          hitRegistered = true;
+          streak += 1;
+          bestStreak = Math.max(bestStreak, streak);
+          lastResult = "Crossbar!";
+          updateHud();
+          ball.vy *= -0.6;
+          ball.vx *= 0.85;
+        }
+      }
+
+      function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lengthSquared = dx * dx + dy * dy;
+        let t = ((px - x1) * dx + (py - y1) * dy) / (lengthSquared || 1);
+        t = Math.max(0, Math.min(1, t));
+        const projX = x1 + t * dx;
+        const projY = y1 + t * dy;
+        return Math.hypot(px - projX, py - projY);
+      }
+
+      function loop() {
+        stepPhysics();
+        drawPitch();
+        requestAnimationFrame(loop);
+      }
+
+      resetBall(true);
+      updateHud();
+      loop();
+    </script>
+  </body>
 </html>
